@@ -1,0 +1,62 @@
+# S3Backup 配置文件示例
+# 复制此文件为 ~/.s3backup.yaml 并修改配置
+
+# 存储配置
+storage:
+  # 存储提供商: aws, qiniu, aliyun
+  provider: qiniu
+
+  # 七牛云 S3 协议端点
+  # 华东: s3.cn-east-1.qiniucs.com
+  # 华北: s3.cn-north-1.qiniucs.com
+  # 华南: s3.cn-south-1.qiniucs.com
+  endpoint: s3.cn-east-1.qiniucs.com
+
+  # 区域（AWS 使用）
+  region: cn-east-1
+
+  # 存储桶名称
+  bucket: my-backup-bucket
+
+  # 敏感信息建议从 .env 文件或环境变量读取
+  # access_key: ${S3BACKUP_ACCESS_KEY}
+  # secret_key: ${S3BACKUP_SECRET_KEY}
+
+  # 默认存储类型
+  # standard: 标准存储
+  # ia: 低频访问存储
+  # archive: 归档存储
+  # deep_archive: 深度归档存储
+  storage_class: archive
+
+# 加密配置
+encryption:
+  # 是否启用加密
+  enabled: true
+
+  # 加密密码（建议从 .env 文件或环境变量读取）
+  # password: ${S3BACKUP_ENCRYPT_PASSWORD}
+
+  # 或使用密钥文件
+  # key_file: /path/to/keyfile
+
+# 备份配置
+backup:
+  # 默认排除模式
+  excludes:
+    - "*.log"
+    - "*.tmp"
+    - ".git/**"
+    - "node_modules/**"
+    - ".DS_Store"
+    - "*.swp"
+
+  # 压缩格式: gzip, none
+  compression: gzip
+
+  # 分块大小（字节），默认 5MB
+  # S3 Multipart Upload 最小分块为 5MB
+  chunk_size: 5242880
+
+  # 并发上传数，默认 4
+  concurrency: 4

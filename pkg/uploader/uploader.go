@@ -1,0 +1,229 @@
+package uploader
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/lukelzlz/s3backup/pkg/storage"
+)
+
+// Uploader 上传管理器
+type Uploader struct {
+	adapter     storage.StorageAdapter
+	chunkSize   int64
+	concurrency int
+}
+
+// NewUploader 创建上传管理器
+func NewUploader(adapter storage.StorageAdapter, chunkSize int64, concurrency int) *Uploader {
+	if chunkSize <= 0 {
+		chunkSize = 5 * 1024 * 1024 // 默认 5MB
+	}
+	if concurrency <= 0 {
+		concurrency = 4 // 默认并发数
+	}
+
+	return &Uploader{
+		adapter:     adapter,
+		chunkSize:   chunkSize,
+		concurrency: concurrency,
+	}
+}
+
+// Upload 从 reader 读取数据并上传
+func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts storage.UploadOptions) error {
+	// 初始化 Multipart Upload
+	uploadID, err := u.adapter.InitMultipartUpload(ctx, key, opts)
+	if err != nil {
+		return fmt.Errorf("failed to init multipart upload: %w", err)
+	}
+
+	// 确保在出错时取消上传
+	defer func() {
+		if err != nil {
+			_ = u.adapter.AbortMultipartUpload(ctx, key, uploadID)
+		}
+	}()
+
+	// 创建分块通道
+	chunkChan := make(chan *chunk, u.concurrency*2)
+	resultChan := make(chan *partResult, u.concurrency)
+	errorChan := make(chan error, 1)
+
+	// 启动 worker goroutines
+	var wg sync.WaitGroup
+	for i := 0; i < u.concurrency; i++ {
+		wg.Add(1)
+		go u.worker(ctx, &wg, key, uploadID, chunkChan, resultChan, errorChan)
+	}
+
+	// 读取数据并发送分块
+	go u.readChunks(ctx, r, chunkChan, errorChan)
+
+	// 收集结果
+	var parts []storage.CompletedPart
+	partCount := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case result := <-resultChan:
+			parts = append(parts, storage.CompletedPart{
+				PartNumber: result.partNumber,
+				ETag:       result.etag,
+			})
+			partCount++
+
+		case err := <-errorChan:
+			wg.Wait()
+			return err
+
+		case <-time.After(100 * time.Millisecond):
+			// 检查是否所有 worker 都已完成
+			if len(resultChan) == 0 && len(chunkChan) == 0 {
+				// 再等待一下确保所有结果都收集完毕
+				time.Sleep(200 * time.Millisecond)
+				if len(resultChan) == 0 {
+					goto complete
+				}
+			}
+		}
+	}
+
+complete:
+	wg.Wait()
+
+	// 按分块号排序
+	u.sortParts(parts)
+
+	// 完成上传
+	if err := u.adapter.CompleteMultipartUpload(ctx, key, uploadID, parts); err != nil {
+		return fmt.Errorf("failed to complete multipart upload: %w", err)
+	}
+
+	return nil
+}
+
+// worker 处理分块上传
+func (u *Uploader) worker(ctx context.Context, wg *sync.WaitGroup, key, uploadID string,
+	chunkChan <-chan *chunk, resultChan chan<- *partResult, errorChan chan<- error) {
+
+	defer wg.Done()
+
+	for chunk := range chunkChan {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		etag, err := u.adapter.UploadPart(ctx, key, uploadID, chunk.partNumber, bytes.NewReader(chunk.data), chunk.size)
+		if err != nil {
+			errorChan <- fmt.Errorf("failed to upload part %d: %w", chunk.partNumber, err)
+			return
+		}
+
+		resultChan <- &partResult{
+			partNumber: chunk.partNumber,
+			etag:       etag,
+		}
+
+		// 回收缓冲区
+		putBuffer(chunk.data)
+	}
+}
+
+// readChunks 读取数据并发送分块
+func (u *Uploader) readChunks(ctx context.Context, r io.Reader, chunkChan chan<- *chunk, errorChan chan<- error) {
+	defer close(chunkChan)
+
+	partNumber := 1
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// 获取缓冲区
+		buf := getBuffer(u.chunkSize)
+
+		// 读取数据
+		n, err := io.ReadFull(r, buf)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			putBuffer(buf)
+			errorChan <- fmt.Errorf("failed to read data: %w", err)
+			return
+		}
+
+		if n == 0 {
+			putBuffer(buf)
+			return
+		}
+
+		// 发送分块
+		chunkChan <- &chunk{
+			partNumber: partNumber,
+			data:       buf[:n],
+			size:       int64(n),
+		}
+
+		partNumber++
+	}
+}
+
+// sortParts 按分块号排序
+func (u *Uploader) sortParts(parts []storage.CompletedPart) {
+	// 简单冒泡排序（分块数量通常不多）
+	n := len(parts)
+	for i := 0; i < n-1; i++ {
+		for j := 0; j < n-i-1; j++ {
+			if parts[j].PartNumber > parts[j+1].PartNumber {
+				parts[j], parts[j+1] = parts[j+1], parts[j]
+			}
+		}
+	}
+}
+
+// chunk 数据分块
+type chunk struct {
+	partNumber int
+	data       []byte
+	size       int64
+}
+
+// partResult 分块上传结果
+type partResult struct {
+	partNumber int
+	etag       string
+}
+
+// 缓冲池
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 5*1024*1024) // 5MB
+	},
+}
+
+// getBuffer 从池中获取缓冲区
+func getBuffer(size int64) []byte {
+	buf := bufferPool.Get().([]byte)
+	if int64(len(buf)) < size {
+		return make([]byte, size)
+	}
+	return buf
+}
+
+// putBuffer 将缓冲区放回池中
+func putBuffer(buf []byte) {
+	if cap(buf) == 5*1024*1024 {
+		bufferPool.Put(buf)
+	}
+}
