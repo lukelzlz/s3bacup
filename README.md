@@ -92,10 +92,10 @@ s3backup backup --config ~/.s3backup.yaml /path/to/backup
 s3backup backup --provider aws --bucket my-bucket /path/to/backup
 
 # 七牛云
-s3backup backup --provider qiniu --endpoint s3.cn-east-1.qiniucs.com --bucket my-bucket /path/to/backup
+s3backup backup --provider qiniu --endpoint https://s3.cn-east-1.qiniucs.com --bucket my-bucket /path/to/backup
 
 # 阿里云 OSS
-s3backup backup --provider aliyun --endpoint oss-cn-hangzhou.aliyuncs.com --bucket my-bucket /path/to/backup
+s3backup backup --provider aliyun --endpoint https://oss-cn-hangzhou.aliyuncs.com --bucket my-bucket /path/to/backup
 ```
 
 ### 设置存储类型
@@ -337,7 +337,8 @@ A: 配置文件中的 `chunk_size` 必须至少为 5MB（5242880 字节）
 A: 确保使用相同的密码或密钥文件。密钥派生使用 Argon2id 算法，密码区分大小写
 
 **Q: 连接七牛云失败**
-A: 检查 endpoint 是否正确，七牛云 S3 协议端点格式为 `s3.<region>.qiniucs.com`
+A: 检查 endpoint 是否正确，七牛云 S3 协议端点格式为 `https://s3.<region>.qiniucs.com`
+   注意：端点必须包含协议前缀（https://），如果不包含，系统会自动添加。
 
 **Q: 某些文件被排除**
 A: 检查配置文件中的 `excludes` 模式，支持 glob 模式匹配

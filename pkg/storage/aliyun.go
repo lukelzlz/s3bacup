@@ -35,7 +35,7 @@ func NewAliyunAdapter(ctx context.Context, region, endpoint, bucket, accessKey, 
 
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		if endpoint != "" {
-			o.BaseEndpoint = aws.String(endpoint)
+			o.BaseEndpoint = aws.String(normalizeEndpoint(endpoint))
 		}
 	})
 

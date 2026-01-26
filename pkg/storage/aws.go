@@ -34,7 +34,7 @@ func NewAWSAdapter(ctx context.Context, region, endpoint, bucket, accessKey, sec
 
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		if endpoint != "" {
-			o.BaseEndpoint = aws.String(endpoint)
+			o.BaseEndpoint = aws.String(normalizeEndpoint(endpoint))
 		}
 	})
 

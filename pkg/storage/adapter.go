@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"io"
+	"strings"
 )
 
 // StorageAdapter 定义存储适配器接口
@@ -37,4 +38,18 @@ type UploadOptions struct {
 type CompletedPart struct {
 	PartNumber int
 	ETag       string
+}
+
+// normalizeEndpoint 规范化端点格式，确保包含协议前缀
+// 如果端点不包含 http:// 或 https://，则自动添加 https://
+func normalizeEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return endpoint
+	}
+	endpoint = strings.TrimSpace(endpoint)
+	if !strings.HasPrefix(strings.ToLower(endpoint), "http://") &&
+		!strings.HasPrefix(strings.ToLower(endpoint), "https://") {
+		return "https://" + endpoint
+	}
+	return endpoint
 }

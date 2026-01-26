@@ -7,10 +7,12 @@ storage:
   provider: qiniu
 
   # 七牛云 S3 协议端点
-  # 华东: s3.cn-east-1.qiniucs.com
-  # 华北: s3.cn-north-1.qiniucs.com
-  # 华南: s3.cn-south-1.qiniucs.com
-  endpoint: s3.cn-east-1.qiniucs.com
+  # 注意：端点必须包含协议前缀（https://）
+  # 华东: https://s3.cn-east-1.qiniucs.com
+  # 华北: https://s3.cn-north-1.qiniucs.com
+  # 华南: https://s3.cn-south-1.qiniucs.com
+  # 兼容性：如果不包含协议前缀，系统会自动添加 https://
+  endpoint: https://s3.cn-east-1.qiniucs.com
 
   # 区域（AWS 使用）
   region: cn-east-1

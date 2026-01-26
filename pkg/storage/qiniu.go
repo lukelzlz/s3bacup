@@ -36,7 +36,7 @@ func NewQiniuAdapter(ctx context.Context, endpoint, bucket, accessKey, secretKey
 
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		if endpoint != "" {
-			o.BaseEndpoint = aws.String(endpoint)
+			o.BaseEndpoint = aws.String(normalizeEndpoint(endpoint))
 		}
 	})
 
