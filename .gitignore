@@ -1,5 +1,5 @@
 # Binaries
-s3backup
+/s3backup
 *.exe
 *.exe~
 *.dll
