@@ -65,7 +65,9 @@ func init() {
 }
 
 func runBackup(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
+	startTime := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	defer cancel()
 
 	// 加载配置
 	cfg, err := config.LoadConfig(cfgFile, envFile)
@@ -127,7 +129,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 
 	// 生成备份文件名
 	if backupName == "" {
-		timestamp := time.Now().Format("20060102-150405")
+		timestamp := startTime.Format("20060102-150405")
 		backupName = fmt.Sprintf("backup-%s.tar.gz", timestamp)
 		if cfg.Encryption.Enabled {
 			backupName += ".enc"
@@ -155,7 +157,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	pr, pw := io.Pipe()
 
 	// 错误通道
-	errChan := make(chan error, 2)
+	errChan := make(chan error, 3)
 
 	// 启动归档 goroutine
 	go func() {
@@ -166,27 +168,35 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		if cfg.Encryption.Enabled {
 			encryptor, err := createEncryptor(cfg)
 			if err != nil {
+				cancel()
 				errChan <- err
 				return
 			}
 			encWriter, err := encryptor.WrapWriter(pw)
 			if err != nil {
+				cancel()
 				errChan <- fmt.Errorf("failed to create encrypt writer: %w", err)
 				return
 			}
-			defer encWriter.Close()
+			defer func() {
+				if err := encWriter.Close(); err != nil {
+					errChan <- fmt.Errorf("failed to close encryptor: %w", err)
+				}
+			}()
 			writer = encWriter
 		}
 
 		// 创建归档器
 		archiver, err := archive.NewArchiver(includes, cfg.Backup.Excludes)
 		if err != nil {
+			cancel()
 			errChan <- fmt.Errorf("failed to create archiver: %w", err)
 			return
 		}
 
 		// 执行归档
 		if err := archiver.Archive(ctx, writer); err != nil {
+			cancel()
 			errChan <- fmt.Errorf("failed to archive: %w", err)
 			return
 		}
@@ -198,14 +208,19 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		upl := uploader.NewUploader(adapter, cfg.Backup.ChunkSize, cfg.Backup.Concurrency)
 
 		// 上传选项
+		contentType := "application/gzip"
+		if cfg.Encryption.Enabled {
+			contentType = "application/octet-stream"
+		}
 		opts := storage.UploadOptions{
 			StorageClass: storage.ParseStorageClass(cfg.Storage.StorageClass),
-			ContentType:  "application/gzip",
+			ContentType:  contentType,
 		}
 
 		// 启动上传 goroutine
 		go func() {
 			if err := upl.Upload(ctx, backupName, pr, opts); err != nil {
+				cancel()
 				errChan <- fmt.Errorf("failed to upload: %w", err)
 				return
 			}
@@ -226,6 +241,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 					if err == io.EOF {
 						errChan <- nil
 					} else {
+						cancel()
 						errChan <- fmt.Errorf("failed to read: %w", err)
 					}
 					return
@@ -282,6 +298,9 @@ func createEncryptor(cfg *config.Config) (*crypto.StreamEncryptor, error) {
 		if password == "" {
 			return nil, fmt.Errorf("encryption password is required")
 		}
+		// TODO: Verify the correct function name when pkg/crypto package is implemented.
+		// This should derive from a password, but the function name suggests it derives from a file.
+		// Consider using a function like crypto.DeriveKeyFromPassword() instead.
 		aesKey, hmacKey, err = crypto.DeriveKeyFromPasswordFile(password)
 		if err != nil {
 			return nil, fmt.Errorf("failed to derive key: %w", err)

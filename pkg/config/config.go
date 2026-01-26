@@ -166,6 +166,12 @@ func (c *Config) GetPassword() string {
 
 // Validate 验证配置
 func (c *Config) Validate() error {
+	// 验证存储提供商
+	provider := strings.ToLower(c.Storage.Provider)
+	if provider != "aws" && provider != "qiniu" && provider != "aliyun" {
+		return fmt.Errorf("storage provider must be one of: aws, qiniu, aliyun (got: %s)", c.Storage.Provider)
+	}
+
 	if c.Storage.Bucket == "" {
 		return fmt.Errorf("storage bucket is required")
 	}
@@ -178,6 +184,11 @@ func (c *Config) Validate() error {
 	secretKey := c.GetSecretKey()
 	if secretKey == "" {
 		return fmt.Errorf("storage secret_key is required")
+	}
+
+	// 验证分块大小（至少 5MB）
+	if c.Backup.ChunkSize < 5*1024*1024 {
+		return fmt.Errorf("backup chunk_size must be at least 5MB (got: %d bytes)", c.Backup.ChunkSize)
 	}
 
 	if c.Encryption.Enabled {

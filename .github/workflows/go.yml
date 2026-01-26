@@ -36,4 +36,4 @@ jobs:
       run: go test ./...
 
     - name: Verify binary
-      run: ./s3backup --version || ./s3backup --help
+      run: ./s3backup --help
