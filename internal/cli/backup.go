@@ -11,6 +11,7 @@ import (
 	"github.com/lukelzlz/s3backup/pkg/archive"
 	"github.com/lukelzlz/s3backup/pkg/config"
 	"github.com/lukelzlz/s3backup/pkg/crypto"
+	"github.com/lukelzlz/s3backup/pkg/progress"
 	"github.com/lukelzlz/s3backup/pkg/storage"
 	"github.com/lukelzlz/s3backup/pkg/uploader"
 	"github.com/spf13/cobra"
@@ -32,6 +33,7 @@ var (
 	concurrency   int
 	chunkSize     int64
 	dryRun        bool
+	noProgress    bool
 )
 
 // backupCmd 备份命令
@@ -62,6 +64,7 @@ func init() {
 	backupCmd.Flags().IntVar(&concurrency, "concurrency", 0, "并发上传数")
 	backupCmd.Flags().Int64Var(&chunkSize, "chunk-size", 0, "分块大小（字节）")
 	backupCmd.Flags().BoolVar(&dryRun, "dry-run", false, "模拟运行，不实际上传")
+	backupCmd.Flags().BoolVar(&noProgress, "no-progress", false, "禁用进度条")
 }
 
 func runBackup(cmd *cobra.Command, args []string) error {
@@ -206,6 +209,16 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	if !dryRun {
 		// 创建上传器
 		upl := uploader.NewUploader(adapter, cfg.Backup.ChunkSize, cfg.Backup.Concurrency)
+
+		// 设置进度报告器
+		var reporter progress.Reporter
+		if noProgress {
+			reporter = progress.NewSilent()
+		} else {
+			reporter = progress.NewBar()
+		}
+		upl.SetProgressReporter(reporter)
+		defer reporter.Close()
 
 		// 上传选项
 		contentType := "application/gzip"

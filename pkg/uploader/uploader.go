@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
+	"sync/atomic"
 
+	"github.com/lukelzlz/s3backup/pkg/progress"
 	"github.com/lukelzlz/s3backup/pkg/storage"
 )
 
@@ -16,6 +17,8 @@ type Uploader struct {
 	adapter     storage.StorageAdapter
 	chunkSize   int64
 	concurrency int
+	reporter    progress.Reporter
+	uploaded    atomic.Int64
 }
 
 // NewUploader 创建上传管理器
@@ -31,11 +34,20 @@ func NewUploader(adapter storage.StorageAdapter, chunkSize int64, concurrency in
 		adapter:     adapter,
 		chunkSize:   chunkSize,
 		concurrency: concurrency,
+		reporter:    progress.NewSilent(),
 	}
+}
+
+// SetProgressReporter 设置进度报告器
+func (u *Uploader) SetProgressReporter(r progress.Reporter) {
+	u.reporter = r
 }
 
 // Upload 从 reader 读取数据并上传
 func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts storage.UploadOptions) error {
+	// 初始化进度报告
+	u.reporter.Init(0)
+
 	// 初始化 Multipart Upload
 	uploadID, err := u.adapter.InitMultipartUpload(ctx, key, opts)
 	if err != nil {
@@ -45,6 +57,7 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 	// 确保在出错时取消上传
 	defer func() {
 		if err != nil {
+			_ = u.reporter.Close()
 			_ = u.adapter.AbortMultipartUpload(ctx, key, uploadID)
 		}
 	}()
@@ -54,6 +67,9 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 	resultChan := make(chan *partResult, u.concurrency)
 	errorChan := make(chan error, 1)
 
+	// 用于跟踪读取是否完成
+	readDone := make(chan struct{})
+
 	// 启动 worker goroutines
 	var wg sync.WaitGroup
 	for i := 0; i < u.concurrency; i++ {
@@ -62,43 +78,47 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 	}
 
 	// 读取数据并发送分块
-	go u.readChunks(ctx, r, chunkChan, errorChan)
+	go func() {
+		u.readChunks(ctx, r, chunkChan, errorChan)
+		close(readDone)
+	}()
 
 	// 收集结果
 	var parts []storage.CompletedPart
-	partCount := 0
 
+	// 等待所有 worker 完成和结果收集
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// 处理结果和错误
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 
-		case result := <-resultChan:
+		case result, ok := <-resultChan:
+			if !ok {
+				// resultChan 已关闭，所有 worker 完成
+				goto complete
+			}
 			parts = append(parts, storage.CompletedPart{
 				PartNumber: result.partNumber,
 				ETag:       result.etag,
 			})
-			partCount++
 
 		case err := <-errorChan:
-			wg.Wait()
+			// 有错误发生
 			return err
 
-		case <-time.After(100 * time.Millisecond):
-			// 检查是否所有 worker 都已完成
-			if len(resultChan) == 0 && len(chunkChan) == 0 {
-				// 再等待一下确保所有结果都收集完毕
-				time.Sleep(200 * time.Millisecond)
-				if len(resultChan) == 0 {
-					goto complete
-				}
-			}
+		case <-readDone:
+			// 读取完成，但可能还有结果在路上
+			// 继续等待 resultChan 关闭
 		}
 	}
 
 complete:
-	wg.Wait()
-
 	// 按分块号排序
 	u.sortParts(parts)
 
@@ -106,6 +126,9 @@ complete:
 	if err := u.adapter.CompleteMultipartUpload(ctx, key, uploadID, parts); err != nil {
 		return fmt.Errorf("failed to complete multipart upload: %w", err)
 	}
+
+	u.reporter.Complete()
+	_ = u.reporter.Close()
 
 	return nil
 }
@@ -128,6 +151,9 @@ func (u *Uploader) worker(ctx context.Context, wg *sync.WaitGroup, key, uploadID
 			errorChan <- fmt.Errorf("failed to upload part %d: %w", chunk.partNumber, err)
 			return
 		}
+
+		// 更新进度
+		u.reporter.Add(chunk.size)
 
 		resultChan <- &partResult{
 			partNumber: chunk.partNumber,
