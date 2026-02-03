@@ -86,6 +86,9 @@ func (b *Bar) Complete() {
 
 // Close 关闭进度条
 func (b *Bar) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if b.bar == nil {
 		return nil
 	}

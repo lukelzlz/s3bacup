@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -19,6 +20,7 @@ type mockAdapter struct {
 	uploadPartCalled   atomic.Int64
 	completeCalled     atomic.Int64
 	abortCalled        atomic.Int64
+	mu                 sync.Mutex
 	uploadedParts      []storage.CompletedPart
 	shouldFailInit     bool
 	shouldFailPart     bool
@@ -36,15 +38,25 @@ func (m *mockAdapter) InitMultipartUpload(ctx context.Context, key string, opts 
 
 func (m *mockAdapter) UploadPart(ctx context.Context, key, uploadID string, partNumber int, r io.Reader, size int64) (string, error) {
 	m.uploadPartCalled.Add(1)
-	if m.shouldFailPart && partNumber == m.partNumberToFail {
+
+	m.mu.Lock()
+	shouldFail := m.shouldFailPart && partNumber == m.partNumberToFail
+	m.mu.Unlock()
+
+	if shouldFail {
 		return "", storage.ErrMockUploadPartFailed
 	}
+
 	// 读取所有数据以确保正确传递
 	data, _ := io.ReadAll(r)
+
+	m.mu.Lock()
 	m.uploadedParts = append(m.uploadedParts, storage.CompletedPart{
 		PartNumber: partNumber,
 		ETag:       fmt.Sprintf("etag-%d", len(data)),
 	})
+	m.mu.Unlock()
+
 	return fmt.Sprintf("etag-%d", len(data)), nil
 }
 
@@ -70,6 +82,9 @@ func (m *mockAdapter) SetStorageClass(ctx context.Context, key string, class sto
 }
 
 func (m *mockAdapter) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.initCalled.Store(0)
 	m.uploadPartCalled.Add(-m.uploadPartCalled.Load())
 	m.completeCalled.Store(0)
