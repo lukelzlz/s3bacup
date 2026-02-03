@@ -97,6 +97,10 @@ func LoadConfig(configPath, envPath string) (*Config, error) {
 // loadEnvFile 加载 .env 文件
 func loadEnvFile(envPath string) error {
 	if envPath != "" {
+		// 显式指定的路径，如果不存在也忽略
+		if _, err := os.Stat(envPath); os.IsNotExist(err) {
+			return nil
+		}
 		return godotenv.Load(envPath)
 	}
 

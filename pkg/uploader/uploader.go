@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -44,17 +45,18 @@ func (u *Uploader) SetProgressReporter(r progress.Reporter) {
 }
 
 // Upload 从 reader 读取数据并上传
-func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts storage.UploadOptions) error {
+func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts storage.UploadOptions) (err error) {
 	// 初始化进度报告
 	u.reporter.Init(0)
 
 	// 初始化 Multipart Upload
-	uploadID, err := u.adapter.InitMultipartUpload(ctx, key, opts)
-	if err != nil {
-		return fmt.Errorf("failed to init multipart upload: %w", err)
+	uploadID, initErr := u.adapter.InitMultipartUpload(ctx, key, opts)
+	if initErr != nil {
+		return fmt.Errorf("failed to init multipart upload: %w", initErr)
 	}
 
 	// 确保在出错时取消上传
+	// 使用命名返回值 err，确保任何返回路径都会触发清理
 	defer func() {
 		if err != nil {
 			_ = u.reporter.Close()
@@ -96,7 +98,8 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			err = ctx.Err()
+			return err
 
 		case result, ok := <-resultChan:
 			if !ok {
@@ -108,9 +111,10 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 				ETag:       result.etag,
 			})
 
-		case err := <-errorChan:
+		case uploadErr := <-errorChan:
 			// 有错误发生
-			return err
+			err = uploadErr
+			return uploadErr
 
 		case <-readDone:
 			// 读取完成，但可能还有结果在路上
@@ -123,8 +127,9 @@ complete:
 	u.sortParts(parts)
 
 	// 完成上传
-	if err := u.adapter.CompleteMultipartUpload(ctx, key, uploadID, parts); err != nil {
-		return fmt.Errorf("failed to complete multipart upload: %w", err)
+	if completeErr := u.adapter.CompleteMultipartUpload(ctx, key, uploadID, parts); completeErr != nil {
+		err = fmt.Errorf("failed to complete multipart upload: %w", completeErr)
+		return err
 	}
 
 	u.reporter.Complete()
@@ -207,15 +212,9 @@ func (u *Uploader) readChunks(ctx context.Context, r io.Reader, chunkChan chan<-
 
 // sortParts 按分块号排序
 func (u *Uploader) sortParts(parts []storage.CompletedPart) {
-	// 简单冒泡排序（分块数量通常不多）
-	n := len(parts)
-	for i := 0; i < n-1; i++ {
-		for j := 0; j < n-i-1; j++ {
-			if parts[j].PartNumber > parts[j+1].PartNumber {
-				parts[j], parts[j+1] = parts[j+1], parts[j]
-			}
-		}
-	}
+	sort.Slice(parts, func(i, j int) bool {
+		return parts[i].PartNumber < parts[j].PartNumber
+	})
 }
 
 // chunk 数据分块
@@ -240,8 +239,9 @@ var bufferPool = sync.Pool{
 
 // getBuffer 从池中获取缓冲区
 func getBuffer(size int64) []byte {
-	buf := bufferPool.Get().([]byte)
-	if int64(len(buf)) < size {
+	buf, ok := bufferPool.Get().([]byte)
+	if !ok || int64(len(buf)) < size {
+		// 如果类型断言失败或缓冲区太小，创建新的
 		return make([]byte, size)
 	}
 	return buf

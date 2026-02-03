@@ -208,10 +208,11 @@ func (dr *DecryptReader) Read(p []byte) (int, error) {
 
 // VerifyHMAC 验证 HMAC
 // 需要在读取完所有数据后调用
+// Deprecated: 请使用 WrapReaderWithHMAC 替代，它会在读取时自动验证 HMAC
 func (e *StreamEncryptor) VerifyHMAC(r io.Reader, expectedHMAC []byte) error {
-	// 这里简化处理，实际实现需要在读取时计算 HMAC
-	// 完整实现需要包装 reader 来计算 HMAC
-	return nil
+	// 此函数已弃用，因为无法在不消费 reader 的情况下正确验证 HMAC
+	// 请使用 WrapReaderWithHMAC，它在 Close() 时自动验证
+	return fmt.Errorf("VerifyHMAC is deprecated, use WrapReaderWithHMAC instead")
 }
 
 // DecryptReaderWithHMAC 包装 reader 并在读取时验证 HMAC

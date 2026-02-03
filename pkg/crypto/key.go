@@ -43,6 +43,9 @@ func DeriveKey(password string, salt []byte) (aesKey, hmacKey []byte, err error)
 
 // DeriveKeyFromPasswordFile 从密码派生密钥并生成新的盐值
 func DeriveKeyFromPasswordFile(password string) (aesKey, hmacKey []byte, err error) {
+	if password == "" {
+		return nil, nil, fmt.Errorf("password cannot be empty")
+	}
 	var k1, k2 []byte
 	k1, k2, err = DeriveKey(password, nil)
 	return k1, k2, err
