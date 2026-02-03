@@ -24,6 +24,9 @@ GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o s3backup-darwin-arm64 cmd/
 
 # Run the binary
 ./s3backup backup --help
+
+# Run with progress disabled (for scripting)
+./s3backup backup --no-progress /path/to/backup
 ```
 
 ## Architecture
@@ -50,6 +53,7 @@ Memory usage is approximately `concurrency × chunk_size` (default: 4 × 5MB = 2
 - `pkg/crypto/`: AES-256-CTR + HMAC-SHA512 streaming encryption
 - `pkg/archive/`: tar.gz archiver with glob-based exclusions
 - `pkg/uploader/`: Multipart upload manager with worker pool pattern
+- `pkg/progress/`: Progress reporting interface with Bar and Silent implementations
 
 ### Storage Adapter Interface
 
@@ -96,17 +100,31 @@ Key derivation uses Argon2id from password or direct read from key file.
 - **Glob pattern matching**: Uses `github.com/gobwas/glob` for exclude patterns (e.g., `".git/**"`, `"*.log"`).
 - **Buffer pool**: `pkg/uploader/uploader.go` uses `sync.Pool` for 5MB buffers to reduce GC pressure.
 - **Context cancellation**: All operations respect context cancellation for graceful shutdown (24-hour timeout default).
+- **Concurrent upload race condition**: The uploader uses `readDone` channel and separate result/error channels to coordinate between reader goroutine and upload workers, preventing race conditions when collecting results.
+
+## Progress Display
+
+The uploader now supports progress reporting via `pkg/progress/Reporter` interface:
+- `progress.NewBar()`: Terminal progress bar with upload speed (writes to stderr)
+- `progress.NewSilent()`: No output (for scripts/logs)
+- `--no-progress` flag disables the progress bar
+
+Progress updates come from concurrent upload workers using `atomic.Int64` for thread-safety.
 
 ## Known Limitations
 
 - Backup-only (restore command planned but not implemented)
 - No incremental backup (always full backup)
-- No progress display during upload
 - No resume for interrupted uploads
+- Progress bar shows "unknown total" mode because tar.gz stream size is not known upfront
 
 ## Testing
 
-Limited test coverage currently exists (`pkg/storage/adapter_test.go`). When adding new features:
+Current test coverage:
+- `pkg/storage/adapter_test.go`: `normalizeEndpoint()` variations
+- `pkg/progress/bar_test.go`: Progress bar functionality
+
+When adding new features:
 - Test `normalizeEndpoint()` variations for endpoint handling
 - Verify storage class mapping for each provider
 - Test chunk size validation (must be >= 5MB)
