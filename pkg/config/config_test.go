@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -452,5 +453,186 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if cfg.Backup.ChunkSize != 0 {
 		t.Error("new config should have zero chunk size")
+	}
+}
+
+// TestValidateStorageClass 测试存储类别
+func TestValidateStorageClass(t *testing.T) {
+	tests := []struct {
+		name         string
+		provider     string
+		storageClass string
+		wantErr      bool
+	}{
+		{"AWS standard", "aws", "standard", false},
+		{"AWS ia", "aws", "ia", false},
+		{"AWS archive", "aws", "archive", false},
+		{"Qiniu 0", "qiniu", "0", false},
+		{"Qiniu 1", "qiniu", "1", false},
+		{"Aliyun standard", "aliyun", "Standard", false},
+		{"empty storage class", "aws", "", false},        // 使用默认值
+		{"invalid storage class", "aws", "invalid", false}, // 当前不验证，由云提供商验证
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Storage: StorageConfig{
+					Provider:     tt.provider,
+					Bucket:       "test-bucket",
+					AccessKey:    "test-key",
+					SecretKey:    "test-secret",
+					StorageClass: tt.storageClass,
+				},
+				Backup: BackupConfig{
+					ChunkSize: 5 * 1024 * 1024,
+				},
+			}
+
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateConcurrency 测试并发数验证
+func TestValidateConcurrency(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency int
+		wantErr     bool
+	}{
+		{"valid concurrency", 4, false},
+		{"high concurrency", 100, false},
+		{"zero concurrency", 0, false},      // 默认值会生效
+		{"negative concurrency", -1, false}, // 不会验证负数
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Storage: StorageConfig{
+					Provider:  "aws",
+					Bucket:    "test-bucket",
+					AccessKey: "test-key",
+					SecretKey: "test-secret",
+				},
+				Backup: BackupConfig{
+					ChunkSize:   5 * 1024 * 1024,
+					Concurrency: tt.concurrency,
+				},
+			}
+
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateEdgeCases 测试边界情况
+func TestValidateEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		modify  func(*Config)
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "whitespace-only bucket",
+			modify: func(c *Config) {
+				c.Storage.Bucket = "   "
+			},
+			wantErr: false, // 当前实现不修剪空白，云提供商会拒绝
+		},
+		{
+			name: "huge chunk size",
+			modify: func(c *Config) {
+				c.Backup.ChunkSize = 10 * 1024 * 1024 * 1024 // 10GB
+			},
+			wantErr: false, // 当前不限制最大值
+		},
+		{
+			name: "exact minimum chunk size",
+			modify: func(c *Config) {
+				c.Backup.ChunkSize = 5 * 1024 * 1024 // 精确 5MB
+			},
+			wantErr: false,
+		},
+		{
+			name: "one byte below minimum",
+			modify: func(c *Config) {
+				c.Backup.ChunkSize = 5*1024*1024 - 1
+			},
+			wantErr: true,
+			errMsg:  "chunk_size",
+		},
+		{
+			name: "empty provider",
+			modify: func(c *Config) {
+				c.Storage.Provider = ""
+			},
+			wantErr: true,
+			errMsg:  "provider",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Storage: StorageConfig{
+					Provider:  "aws",
+					Bucket:    "test-bucket",
+					AccessKey: "test-key",
+					SecretKey: "test-secret",
+				},
+				Backup: BackupConfig{
+					ChunkSize: 5 * 1024 * 1024,
+				},
+			}
+
+			tt.modify(cfg)
+
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && err != nil && tt.errMsg != "" {
+				if !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("expected error message to contain '%s', got: %v", tt.errMsg, err)
+				}
+			}
+		})
+	}
+}
+
+// TestCredentialsNotLeaked 测试凭证不会在错误消息中泄露
+func TestCredentialsNotLeaked(t *testing.T) {
+	cfg := &Config{
+		Storage: StorageConfig{
+			Provider:  "aws",
+			Bucket:    "test-bucket",
+			AccessKey: "super-secret-key-12345",
+			SecretKey: "even-more-secret-67890",
+		},
+		Backup: BackupConfig{
+			ChunkSize: 5 * 1024 * 1024,
+		},
+	}
+
+	// 测试无效 provider 时的错误消息
+	cfg.Storage.Provider = "invalid"
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid provider")
+	}
+
+	// 确保错误消息不包含凭证
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "super-secret-key-12345") || strings.Contains(errMsg, "even-more-secret-67890") {
+		t.Error("error message should not contain credentials")
 	}
 }

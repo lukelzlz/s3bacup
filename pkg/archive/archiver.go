@@ -55,6 +55,11 @@ func (a *Archiver) Archive(ctx context.Context, w io.Writer) error {
 
 // archivePath 递归归档路径
 func (a *Archiver) archivePath(ctx context.Context, tw *TarWriter, path, base string) error {
+	// 验证路径安全性
+	if err := a.validatePath(path); err != nil {
+		return err
+	}
+
 	// 检查是否被排除
 	if a.isExcluded(path) {
 		return nil
@@ -115,6 +120,11 @@ func (a *Archiver) archivePath(ctx context.Context, tw *TarWriter, path, base st
 
 // archiveFile 归档单个文件
 func (a *Archiver) archiveFile(tw *TarWriter, path, archivePath string, info os.FileInfo) error {
+	// 验证路径安全性
+	if err := a.validatePath(path); err != nil {
+		return err
+	}
+
 	// 检查是否被排除
 	if a.isExcluded(path) {
 		return nil
@@ -161,6 +171,35 @@ func (a *Archiver) isExcluded(path string) bool {
 		}
 	}
 	return false
+}
+
+// isPathSafe 检查路径是否安全，防止路径遍历攻击
+func (a *Archiver) isPathSafe(path string) bool {
+	// 首先在原始路径中检查 ".."（在清理之前）
+	// 我们将路径按分隔符分割，检查是否有 ".." 组件
+	path = filepath.ToSlash(path) // 标准化为使用 /
+
+	// 分割路径并检查每个组件
+	components := strings.Split(path, "/")
+	for _, comp := range components {
+		if comp == ".." {
+			return false
+		}
+		// 也检查 ". "（点加空格）可能是混淆的 ".."
+		if strings.TrimSpace(comp) == ".." {
+			return false
+		}
+	}
+
+	return true
+}
+
+// validatePath 验证路径安全性，如果不安全返回错误
+func (a *Archiver) validatePath(path string) error {
+	if !a.isPathSafe(path) {
+		return fmt.Errorf("path safety check failed: %s contains potentially dangerous components (..)", path)
+	}
+	return nil
 }
 
 // GetTotalSize 计算所有包含文件的总大小

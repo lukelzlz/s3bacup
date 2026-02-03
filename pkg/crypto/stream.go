@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -215,15 +216,13 @@ func (e *StreamEncryptor) VerifyHMAC(r io.Reader, expectedHMAC []byte) error {
 	return fmt.Errorf("VerifyHMAC is deprecated, use WrapReaderWithHMAC instead")
 }
 
-// DecryptReaderWithHMAC 包装 reader 并在读取时验证 HMAC
-type DecryptReaderWithHMAC struct {
-	*DecryptReader
-	expectedHMAC []byte
-}
-
 // WrapReaderWithHMAC 包装 reader 并验证 HMAC
+// 文件格式: [4 bytes magic][16 bytes IV][encrypted data...][8 bytes data length][64 bytes HMAC]
+//
+// 注意：此实现将所有加密数据读入内存进行解析和验证。
+// 对于非常大的文件（GB级别），这会消耗大量内存。
 func (e *StreamEncryptor) WrapReaderWithHMAC(r io.Reader) (io.ReadCloser, error) {
-	// 读取完整文件头
+	// 读取魔数和 IV
 	header := make([]byte, 4+IVSize)
 	if _, err := io.ReadFull(r, header); err != nil {
 		return nil, fmt.Errorf("failed to read header: %w", err)
@@ -247,66 +246,54 @@ func (e *StreamEncryptor) WrapReaderWithHMAC(r io.Reader) (io.ReadCloser, error)
 	// 创建 CTR 流
 	stream := cipher.NewCTR(block, iv)
 
-	// 创建 HMAC
-	hmac := hmac.New(sha512.New, e.hmacKey)
+	// 读取所有剩余数据（加密数据 + trailer）
+	encryptedData, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read encrypted data: %w", err)
+	}
 
-	return &decryptReaderWithHMACImpl{
-		iv:       iv,
-		block:    block,
-		stream:   stream,
-		hmac:     hmac,
-		reader:   r,
-		position: 0,
-		buffer:   make([]byte, 32*1024),
+	// 检查最小长度（至少需要 trailerSize 字节）
+	const trailerSize = 8 + 64 // data length + HMAC
+	if len(encryptedData) < trailerSize {
+		return nil, fmt.Errorf("invalid encrypted data: too short (got %d bytes, need at least %d)", len(encryptedData), trailerSize)
+	}
+
+	// 从末尾解析 trailer
+	trailerOffset := len(encryptedData) - trailerSize
+	dataLength := int64(binary.BigEndian.Uint64(encryptedData[trailerOffset : trailerOffset+8]))
+	expectedHMAC := encryptedData[trailerOffset+8:]
+	actualEncryptedData := encryptedData[:trailerOffset]
+
+	// 验证数据长度
+	if int64(len(actualEncryptedData)) != dataLength {
+		return nil, fmt.Errorf("data length mismatch: header says %d, but got %d bytes", dataLength, len(actualEncryptedData))
+	}
+
+	// 计算并验证 HMAC
+	hmacCalc := hmac.New(sha512.New, e.hmacKey)
+	hmacCalc.Write(actualEncryptedData)
+	actualHMAC := hmacCalc.Sum(nil)
+
+	if !hmac.Equal(actualHMAC, expectedHMAC) {
+		return nil, fmt.Errorf("HMAC verification failed: data may be corrupted or tampered")
+	}
+
+	// 解密数据
+	decrypted := make([]byte, len(actualEncryptedData))
+	stream.XORKeyStream(decrypted, actualEncryptedData)
+
+	// 返回一个从解密数据读取的 reader
+	return &verifiedReadCloser{
+		Reader: bytes.NewReader(decrypted),
 	}, nil
 }
 
-type decryptReaderWithHMACImpl struct {
-	iv       []byte
-	block    cipher.Block
-	stream   cipher.Stream
-	hmac     hash.Hash
-	reader   io.Reader
-	position int64
-	buffer   []byte
+// verifiedReadCloser 简单的 io.ReadCloser 包装器
+type verifiedReadCloser struct {
+	*bytes.Reader
 }
 
-func (d *decryptReaderWithHMACImpl) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-
-	n, err := d.reader.Read(d.buffer)
-	if err != nil && err != io.EOF {
-		return 0, err
-	}
-
-	if n == 0 {
-		return 0, io.EOF
-	}
-
-	decrypted := make([]byte, n)
-	d.stream.XORKeyStream(decrypted, d.buffer[:n])
-
-	d.hmac.Write(d.buffer[:n])
-
-	copy(p, decrypted)
-	d.position += int64(n)
-
-	return n, err
-}
-
-func (d *decryptReaderWithHMACImpl) Close() error {
-	// 读取并验证 HMAC
-	expectedHMAC := make([]byte, 64)
-	if _, err := io.ReadFull(d.reader, expectedHMAC); err != nil {
-		return fmt.Errorf("failed to read HMAC: %w", err)
-	}
-
-	actualHMAC := d.hmac.Sum(nil)
-	if !hmac.Equal(actualHMAC, expectedHMAC) {
-		return fmt.Errorf("HMAC verification failed")
-	}
-
+func (v *verifiedReadCloser) Close() error {
+	// HMAC 已经在 WrapReaderWithHMAC 中验证
 	return nil
 }

@@ -8,13 +8,8 @@ import (
 )
 
 // TestEncryptDecrypt 测试加密和解密
-// 注意: decryptReaderWithHMACImpl 实现问题：
-// 文件格式是 [magic][IV][encrypted data][8 bytes length][64 bytes HMAC]
-// 但 decryptReaderWithHMACImpl 不知道何时停止读取加密数据，
-// 会继续尝试解密 length 和 HMAC 字段，导致数据损坏。
-// TODO: 修复 decryptReaderWithHMACImpl 以正确处理数据边界
+// 文件格式: [magic][IV][encrypted data][8 bytes length][64 bytes HMAC]
 func TestEncryptDecrypt(t *testing.T) {
-	t.Skip("decryptReaderWithHMACImpl doesn't handle data boundaries correctly")
 
 	aesKey, hmacKey, err := DeriveKeyFromPasswordFile("test-password-123")
 	if err != nil {
@@ -71,10 +66,7 @@ func TestEncryptDecrypt(t *testing.T) {
 }
 
 // TestEncryptDecryptWithHMAC 测试带 HMAC 验证的加密和解密
-// 注意: decryptReaderWithHMACImpl 实现问题（见 TestEncryptDecrypt）
-// TODO: 修复 decryptReaderWithHMACImpl 以正确处理数据边界
 func TestEncryptDecryptWithHMAC(t *testing.T) {
-	t.Skip("decryptReaderWithHMACImpl doesn't handle data boundaries correctly")
 
 	aesKey, hmacKey, err := DeriveKeyFromPasswordFile("test-password-123")
 	if err != nil {
@@ -127,6 +119,7 @@ func TestEncryptDecryptWithHMAC(t *testing.T) {
 }
 
 // TestHMACVerification 测试 HMAC 验证失败的情况
+// HMAC 验证现在在打开读取器时立即进行，而不是在 Close 时
 func TestHMACVerification(t *testing.T) {
 	aesKey, hmacKey, err := DeriveKeyFromPasswordFile("test-password-123")
 	if err != nil {
@@ -157,22 +150,19 @@ func TestHMACVerification(t *testing.T) {
 
 	encryptedData := buf.Bytes()
 
-	// 篡改加密数据
-	encryptedData[len(encryptedData)-10] ^= 0xFF
+	// 篡改加密数据（修改倒数第10个字节）
+	// 注意：文件末尾是 [8字节长度][64字节HMAC]
+	// 对于小数据，倒数第10个字节可能在 HMAC 区域
+	// 让我们修改加密数据部分而不是 HMAC 部分
+	encryptedData[20] ^= 0xFF // 修改头部后面的加密数据
 
-	// 尝试解密，应该检测到 HMAC 不匹配
-	reader, err := encryptor.WrapReaderWithHMAC(bytes.NewReader(encryptedData))
-	if err != nil {
-		t.Fatalf("failed to wrap reader: %v", err)
+	// 尝试解密，应该在 WrapReaderWithHMAC 时就检测到 HMAC 不匹配
+	_, err = encryptor.WrapReaderWithHMAC(bytes.NewReader(encryptedData))
+	if err == nil {
+		t.Error("expected HMAC verification error when opening reader, got nil")
 	}
-
-	_, err = io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("failed to read: %v", err)
-	}
-
-	if err := reader.Close(); err == nil {
-		t.Error("expected HMAC verification error, got nil")
+	if err != nil && !strings.Contains(err.Error(), "HMAC") {
+		t.Errorf("expected HMAC error, got: %v", err)
 	}
 }
 
@@ -234,12 +224,7 @@ func TestInvalidMagicNumber(t *testing.T) {
 }
 
 // TestLargeData 测试大数据加密/解密
-// 注意: 由于 WrapReaderWithHMAC 实现的限制，大文件解密存在问题
-// decryptReaderWithHMACImpl 没有正确处理数据长度字段，会尝试解密
-// 未加密的长度和 HMAC 区域，导致错误。
-// TODO: 修复 decryptReaderWithHMACImpl 以正确处理数据长度字段
 func TestLargeData(t *testing.T) {
-	t.Skip("decryptReaderWithHMACImpl implementation issue: doesn't handle data length field correctly")
 
 	aesKey, hmacKey, err := DeriveKeyFromPasswordFile("test-password-123")
 	if err != nil {
@@ -295,9 +280,7 @@ func TestLargeData(t *testing.T) {
 }
 
 // TestEmptyData 测试空数据
-// 注意: decryptReaderWithHMACImpl 实现有问题，无法正确处理空数据
 func TestEmptyData(t *testing.T) {
-	t.Skip("decryptReaderWithHMACImpl doesn't handle empty data correctly")
 
 	aesKey, hmacKey, err := DeriveKeyFromPasswordFile("test-password-123")
 	if err != nil {

@@ -3,10 +3,10 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -93,6 +93,7 @@ func GenerateKeyFile() ([]byte, error) {
 }
 
 // DeriveKeyFromPasswordWithIterations 使用指定迭代次数派生密钥（用于兼容性）
+// 使用标准 PBKDF2-HMAC-SHA256 算法
 func DeriveKeyFromPasswordWithIterations(password string, salt []byte, iterations uint32) (aesKey, hmacKey []byte, err error) {
 	if salt == nil {
 		salt = make([]byte, SaltSize)
@@ -101,34 +102,14 @@ func DeriveKeyFromPasswordWithIterations(password string, salt []byte, iteration
 		}
 	}
 
-	// 使用 PBKDF2 派生密钥（用于兼容旧版本）
-	// 注意：新版本应使用 Argon2id
-	key := make([]byte, AESKeySize+HMACKeySize)
-
-	// 将迭代次数写入 salt 前面，用于后续验证
-	saltWithIter := make([]byte, SaltSize+4)
-	binary.BigEndian.PutUint32(saltWithIter, iterations)
-	copy(saltWithIter[4:], salt)
-
-	// 这里简化处理，实际应使用 crypto/pbkdf2
-	// 为了简单，我们使用 SHA256 重复迭代
-	hasher := sha256.New()
-	hasher.Write([]byte(password))
-	for i := uint32(0); i < iterations; i++ {
-		hasher.Write(saltWithIter)
-		if i > 0 {
-			hasher.Write(key)
-		}
+	// 验证迭代次数
+	if iterations < 1 {
+		return nil, nil, fmt.Errorf("iterations must be at least 1, got %d", iterations)
 	}
-	hash := hasher.Sum(nil)
 
-	copy(key, hash)
-	// 填充剩余部分
-	for len(key) < AESKeySize+HMACKeySize {
-		hasher.Write(key)
-		hash = hasher.Sum(nil)
-		copy(key[len(hash):], hash)
-	}
+	// 使用标准 PBKDF2 派生密钥
+	// PBKDF2-HMAC-SHA256 是广泛认可的密钥派生算法
+	key := pbkdf2.Key([]byte(password), salt, int(iterations), AESKeySize+HMACKeySize, sha256.New)
 
 	aesKey = key[:AESKeySize]
 	hmacKey = key[AESKeySize : AESKeySize+HMACKeySize]
