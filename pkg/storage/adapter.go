@@ -9,9 +9,9 @@ import (
 
 // Mock 错误类型，用于测试
 var (
-	ErrMockInitFailed        = errors.New("mock: init multipart upload failed")
-	ErrMockUploadPartFailed  = errors.New("mock: upload part failed")
-	ErrMockCompleteFailed    = errors.New("mock: complete multipart upload failed")
+	ErrMockInitFailed       = errors.New("mock: init multipart upload failed")
+	ErrMockUploadPartFailed = errors.New("mock: upload part failed")
+	ErrMockCompleteFailed   = errors.New("mock: complete multipart upload failed")
 )
 
 // StorageAdapter 定义存储适配器接口

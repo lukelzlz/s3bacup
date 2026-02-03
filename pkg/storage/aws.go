@@ -147,6 +147,7 @@ func (a *AWSAdapter) SupportedStorageClasses() []StorageClass {
 // SetStorageClass 设置存储类型（AWS S3 支持在上传时指定，此方法用于后续修改）
 func (a *AWSAdapter) SetStorageClass(ctx context.Context, key string, class StorageClass) error {
 	// AWS S3 需要通过 CopyObject 来修改存储类型
+	// CopySource 格式: source-bucket/source-key (SDK 会进行 URL 编码)
 	copySource := fmt.Sprintf("%s/%s", a.bucket, key)
 	input := &s3.CopyObjectInput{
 		Bucket:            aws.String(a.bucket),

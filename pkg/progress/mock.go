@@ -6,11 +6,11 @@ import (
 
 // MockReporter 是用于测试的模拟进度报告器
 type MockReporter struct {
-	InitCalled    atomic.Int64
-	AddCalled     atomic.Int64
+	InitCalled     atomic.Int64
+	AddCalled      atomic.Int64
 	CompleteCalled atomic.Int64
-	CloseCalled   atomic.Int64
-	AddTotal      atomic.Int64
+	CloseCalled    atomic.Int64
+	AddTotal       atomic.Int64
 }
 
 // NewMockReporter 创建新的模拟报告器

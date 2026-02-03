@@ -134,9 +134,9 @@ func TestValidateBucket(t *testing.T) {
 // TestValidateAccessKey 测试 access key 验证
 func TestValidateAccessKey(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		accessKey string
-		wantErr  bool
+		wantErr   bool
 	}{
 		{"valid key in config", "config-key", false},
 		{"empty key in config", "", true},
@@ -167,9 +167,9 @@ func TestValidateAccessKey(t *testing.T) {
 // TestValidateSecretKey 测试 secret key 验证
 func TestValidateSecretKey(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		secretKey string
-		wantErr  bool
+		wantErr   bool
 	}{
 		{"valid key in config", "config-secret", false},
 		{"empty key in config", "", true},
@@ -200,9 +200,9 @@ func TestValidateSecretKey(t *testing.T) {
 // TestValidateChunkSize 测试分块大小验证
 func TestValidateChunkSize(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		chunkSize int64
-		wantErr  bool
+		wantErr   bool
 	}{
 		{"5MB minimum", 5 * 1024 * 1024, false},
 		{"10MB", 10 * 1024 * 1024, false},
@@ -236,11 +236,11 @@ func TestValidateChunkSize(t *testing.T) {
 // TestValidateEncryption 测试加密配置验证
 func TestValidateEncryption(t *testing.T) {
 	tests := []struct {
-		name         string
-		enabled      bool
-		password     string
-		keyFile      string
-		wantErr      bool
+		name     string
+		enabled  bool
+		password string
+		keyFile  string
+		wantErr  bool
 	}{
 		{"encryption disabled", false, "", "", false},
 		{"encryption with password", true, "test-password", "", false},
@@ -279,10 +279,10 @@ func TestValidateEncryption(t *testing.T) {
 // TestGetAccessKey 测试获取 Access Key
 func TestGetAccessKey(t *testing.T) {
 	tests := []struct {
-		name          string
-		configKey     string
-		envKey        string
-		expectedKey   string
+		name        string
+		configKey   string
+		envKey      string
+		expectedKey string
 	}{
 		{"from config", "config-key", "env-key", "config-key"},
 		{"from env when config empty", "", "env-key", "env-key"},
@@ -314,10 +314,10 @@ func TestGetAccessKey(t *testing.T) {
 // TestGetSecretKey 测试获取 Secret Key
 func TestGetSecretKey(t *testing.T) {
 	tests := []struct {
-		name          string
-		configKey     string
-		envKey        string
-		expectedKey   string
+		name        string
+		configKey   string
+		envKey      string
+		expectedKey string
 	}{
 		{"from config", "config-secret", "env-secret", "config-secret"},
 		{"from env when config empty", "", "env-secret", "env-secret"},
@@ -349,10 +349,10 @@ func TestGetSecretKey(t *testing.T) {
 // TestGetPassword 测试获取密码
 func TestGetPassword(t *testing.T) {
 	tests := []struct {
-		name          string
-		configPwd     string
-		envPwd        string
-		expectedPwd   string
+		name        string
+		configPwd   string
+		envPwd      string
+		expectedPwd string
 	}{
 		{"from config", "config-password", "env-password", "config-password"},
 		{"from env when config empty", "", "env-password", "env-password"},
@@ -470,7 +470,7 @@ func TestValidateStorageClass(t *testing.T) {
 		{"Qiniu 0", "qiniu", "0", false},
 		{"Qiniu 1", "qiniu", "1", false},
 		{"Aliyun standard", "aliyun", "Standard", false},
-		{"empty storage class", "aws", "", false},        // 使用默认值
+		{"empty storage class", "aws", "", false},          // 使用默认值
 		{"invalid storage class", "aws", "invalid", false}, // 当前不验证，由云提供商验证
 	}
 

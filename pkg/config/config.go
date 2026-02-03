@@ -19,7 +19,7 @@ type Config struct {
 
 // StorageConfig 存储配置
 type StorageConfig struct {
-	Provider     string `yaml:"provider"`     // aws, qiniu, aliyun
+	Provider     string `yaml:"provider"` // aws, qiniu, aliyun
 	Endpoint     string `yaml:"endpoint"`
 	Region       string `yaml:"region"`
 	Bucket       string `yaml:"bucket"`

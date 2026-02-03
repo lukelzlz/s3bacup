@@ -4,11 +4,11 @@ package storage
 type StorageClass string
 
 const (
-	StorageClassStandard       StorageClass = "STANDARD"
-	StorageClassInfrequent     StorageClass = "INFREQUENT_ACCESS"
-	StorageClassArchive        StorageClass = "ARCHIVE"
-	StorageClassDeepArchive    StorageClass = "DEEP_ARCHIVE"
-	StorageClassGlacierIR      StorageClass = "GLACIER_IR"
+	StorageClassStandard           StorageClass = "STANDARD"
+	StorageClassInfrequent         StorageClass = "INFREQUENT_ACCESS"
+	StorageClassArchive            StorageClass = "ARCHIVE"
+	StorageClassDeepArchive        StorageClass = "DEEP_ARCHIVE"
+	StorageClassGlacierIR          StorageClass = "GLACIER_IR"
 	StorageClassIntelligentTiering StorageClass = "INTELLIGENT_TIERING"
 )
 

@@ -15,15 +15,15 @@ import (
 
 // mockAdapter 是用于测试的模拟存储适配器
 type mockAdapter struct {
-	initCalled       atomic.Int64
-	uploadPartCalled atomic.Int64
-	completeCalled   atomic.Int64
-	abortCalled      atomic.Int64
-	uploadedParts    []storage.CompletedPart
-	shouldFailInit   bool
-	shouldFailPart   bool
+	initCalled         atomic.Int64
+	uploadPartCalled   atomic.Int64
+	completeCalled     atomic.Int64
+	abortCalled        atomic.Int64
+	uploadedParts      []storage.CompletedPart
+	shouldFailInit     bool
+	shouldFailPart     bool
 	shouldFailComplete bool
-	partNumberToFail int
+	partNumberToFail   int
 }
 
 func (m *mockAdapter) InitMultipartUpload(ctx context.Context, key string, opts storage.UploadOptions) (string, error) {

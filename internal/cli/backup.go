@@ -18,22 +18,22 @@ import (
 )
 
 var (
-	provider      string
-	bucket        string
-	endpoint      string
-	region        string
-	accessKey     string
-	secretKey     string
-	storageClass  string
-	encrypt       bool
-	password      string
-	keyFile       string
-	excludes      []string
-	backupName    string
-	concurrency   int
-	chunkSize     int64
-	dryRun        bool
-	noProgress    bool
+	provider     string
+	bucket       string
+	endpoint     string
+	region       string
+	accessKey    string
+	secretKey    string
+	storageClass string
+	encrypt      bool
+	password     string
+	keyFile      string
+	excludes     []string
+	backupName   string
+	concurrency  int
+	chunkSize    int64
+	dryRun       bool
+	noProgress   bool
 )
 
 // backupCmd 备份命令
@@ -306,14 +306,11 @@ func createEncryptor(cfg *config.Config) (*crypto.StreamEncryptor, error) {
 			return nil, fmt.Errorf("failed to derive key from file: %w", err)
 		}
 	} else {
-		// 从密码派生
+		// 从密码派生密钥
 		password := cfg.GetPassword()
 		if password == "" {
 			return nil, fmt.Errorf("encryption password is required")
 		}
-		// TODO: Verify the correct function name when pkg/crypto package is implemented.
-		// This should derive from a password, but the function name suggests it derives from a file.
-		// Consider using a function like crypto.DeriveKeyFromPassword() instead.
 		aesKey, hmacKey, err = crypto.DeriveKeyFromPasswordFile(password)
 		if err != nil {
 			return nil, fmt.Errorf("failed to derive key: %w", err)
