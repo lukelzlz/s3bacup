@@ -49,6 +49,13 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 	// 初始化进度报告
 	u.reporter.Init(0)
 
+	// 确保在出错时清理资源（包括进度报告器）
+	defer func() {
+		if err != nil {
+			_ = u.reporter.Close()
+		}
+	}()
+
 	// 初始化 Multipart Upload
 	uploadID, initErr := u.adapter.InitMultipartUpload(ctx, key, opts)
 	if initErr != nil {
@@ -59,7 +66,6 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 	// 使用命名返回值 err，确保任何返回路径都会触发清理
 	defer func() {
 		if err != nil {
-			_ = u.reporter.Close()
 			_ = u.adapter.AbortMultipartUpload(ctx, key, uploadID)
 		}
 	}()
