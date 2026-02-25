@@ -65,9 +65,12 @@ func (a *Archiver) archivePath(ctx context.Context, tw *TarWriter, path, base st
 		return nil
 	}
 
-	info, err := os.Stat(path)
+	// 使用 LStat 获取文件信息（不跟随符号链接）
+	info, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("failed to stat %s: %w", path, err)
+		// 如果无法访问，记录警告并跳过
+		fmt.Printf("[警告] 跳过无法访问的文件: %s (%v)\n", path, err)
+		return nil
 	}
 
 	// 计算归档内的路径
@@ -83,36 +86,76 @@ func (a *Archiver) archivePath(ctx context.Context, tw *TarWriter, path, base st
 	default:
 	}
 
-	if info.IsDir() {
-		// 写入目录 header
-		if err := tw.WriteHeader(&TarHeader{
-			Name:       archivePath + "/",
-			Mode:       0755,
-			ModTime:    info.ModTime(),
-			Typeflag:   TypeDir,
-			AccessTime: time.Now(),
-			ChangeTime: time.Now(),
-		}); err != nil {
-			return fmt.Errorf("failed to write dir header: %w", err)
-		}
+	// 检查文件类型
+	mode := info.Mode()
 
-		// 递归处理目录内容
-		entries, err := os.ReadDir(path)
-		if err != nil {
-			return fmt.Errorf("failed to read dir %s: %w", path, err)
-		}
-
-		for _, entry := range entries {
-			fullPath := filepath.Join(path, entry.Name())
-			if err := a.archivePath(ctx, tw, fullPath, archivePath); err != nil {
-				return err
-			}
-		}
+	if mode&os.ModeSymlink != 0 {
+		// 处理符号链接
+		return a.archiveSymlink(tw, path, archivePath, info)
+	} else if mode.IsDir() {
+		// 处理目录
+		return a.archiveDir(ctx, tw, path, archivePath, info)
+	} else if mode.IsRegular() {
+		// 处理普通文件
+		return a.archiveFile(tw, path, archivePath, info)
 	} else {
-		// 写入文件
-		if err := a.archiveFile(tw, path, archivePath, info); err != nil {
+		// 跳过其他类型（设备文件、管道等）
+		fmt.Printf("[警告] 跳过特殊文件: %s (mode: %v)\n", path, mode)
+		return nil
+	}
+}
+
+// archiveDir 归档目录
+func (a *Archiver) archiveDir(ctx context.Context, tw *TarWriter, path, archivePath string, info os.FileInfo) error {
+	// 写入目录 header
+	if err := tw.WriteHeader(&TarHeader{
+		Name:       archivePath + "/",
+		Mode:       int64(info.Mode()),
+		ModTime:    info.ModTime(),
+		Typeflag:   TypeDir,
+		AccessTime: time.Now(),
+		ChangeTime: time.Now(),
+	}); err != nil {
+		return fmt.Errorf("failed to write dir header: %w", err)
+	}
+
+	// 递归处理目录内容
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		fmt.Printf("[警告] 无法读取目录: %s (%v)\n", path, err)
+		return nil
+	}
+
+	for _, entry := range entries {
+		fullPath := filepath.Join(path, entry.Name())
+		if err := a.archivePath(ctx, tw, fullPath, archivePath); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// archiveSymlink 归档符号链接
+func (a *Archiver) archiveSymlink(tw *TarWriter, path, archivePath string, info os.FileInfo) error {
+	// 读取符号链接目标
+	target, err := os.Readlink(path)
+	if err != nil {
+		fmt.Printf("[警告] 无法读取符号链接: %s (%v)\n", path, err)
+		return nil
+	}
+
+	// 写入符号链接 header
+	if err := tw.WriteHeader(&TarHeader{
+		Name:       archivePath,
+		Mode:       int64(info.Mode()),
+		ModTime:    info.ModTime(),
+		Typeflag:   TypeLink,
+		Linkname:   target,
+		AccessTime: time.Now(),
+		ChangeTime: time.Now(),
+	}); err != nil {
+		return fmt.Errorf("failed to write symlink header: %w", err)
 	}
 
 	return nil
@@ -133,7 +176,8 @@ func (a *Archiver) archiveFile(tw *TarWriter, path, archivePath string, info os.
 	// 打开文件
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", path, err)
+		fmt.Printf("[警告] 无法打开文件: %s (%v)\n", path, err)
+		return nil
 	}
 	defer file.Close()
 
