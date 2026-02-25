@@ -69,6 +69,18 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 		return fmt.Errorf("failed to init multipart upload: %w", initErr)
 	}
 
+	// 保存 UploadID 到状态文件
+	if u.stateMgr != nil {
+		initialState := &state.UploadState{
+			Key:          key,
+			UploadID:     uploadID,
+			StorageClass: string(opts.StorageClass),
+			Encrypted:    false, // 由调用者设置
+			Completed:    []state.CompletedPart{},
+		}
+		u.stateMgr.Save(initialState)
+	}
+
 	// 确保在出错时取消上传
 	// 使用命名返回值 err，确保任何返回路径都会触发清理
 	defer func() {
