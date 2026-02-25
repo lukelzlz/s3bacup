@@ -14,68 +14,79 @@ import (
 	"github.com/lukelzlz/s3backup/pkg/storage"
 )
 
-// Uploader 上传管理器
-type Uploader struct {
+// ResumableUploader 支持断点续传的上传器
+type ResumableUploader struct {
 	adapter     storage.StorageAdapter
 	chunkSize   int64
 	concurrency int
 	reporter    progress.Reporter
 	uploaded    atomic.Int64
+	savedState  *state.UploadState
 	stateMgr    *state.StateManager
 }
 
-// NewUploader 创建上传管理器
-func NewUploader(adapter storage.StorageAdapter, chunkSize int64, concurrency int) *Uploader {
+// NewResumableUploader 创建支持断点续传的上传器
+func NewResumableUploader(adapter storage.StorageAdapter, chunkSize int64, concurrency int, savedState *state.UploadState) *ResumableUploader {
 	if chunkSize <= 0 {
-		chunkSize = 5 * 1024 * 1024 // 默认 5MB
+		chunkSize = 5 * 1024 * 1024
 	}
 	if concurrency <= 0 {
-		concurrency = 4 // 默认并发数
+		concurrency = 4
 	}
 
-	return &Uploader{
+	return &ResumableUploader{
 		adapter:     adapter,
 		chunkSize:   chunkSize,
 		concurrency: concurrency,
 		reporter:    progress.NewSilent(),
+		savedState:  savedState,
 	}
 }
 
 // SetProgressReporter 设置进度报告器
-func (u *Uploader) SetProgressReporter(r progress.Reporter) {
+func (u *ResumableUploader) SetProgressReporter(r progress.Reporter) {
 	u.reporter = r
 }
 
 // SetStateManager 设置状态管理器
-func (u *Uploader) SetStateManager(sm *state.StateManager) {
+func (u *ResumableUploader) SetStateManager(sm *state.StateManager) {
 	u.stateMgr = sm
 }
 
-// Upload 从 reader 读取数据并上传
-func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts storage.UploadOptions) (err error) {
+// Upload 从 reader 读取数据并上传（支持断点续传）
+func (u *ResumableUploader) Upload(ctx context.Context, key string, r io.Reader, opts storage.UploadOptions) (err error) {
+	// 检查是否有已保存的状态
+	if u.savedState != nil && u.savedState.UploadID != "" {
+		return u.Resume(ctx, key, u.savedState.UploadID, r, opts)
+	}
+
+	// 新上传，使用普通上传器
+	upl := NewUploader(u.adapter, u.chunkSize, u.concurrency)
+	upl.SetProgressReporter(u.reporter)
+	return upl.Upload(ctx, key, r, opts)
+}
+
+// Resume 从断点恢复上传
+func (u *ResumableUploader) Resume(ctx context.Context, key string, uploadID string, r io.Reader, opts storage.UploadOptions) (err error) {
 	// 初始化进度报告
 	u.reporter.Init(0)
 
-	// 确保在出错时清理资源（包括进度报告器）
+	// 确保在出错时清理资源
 	defer func() {
 		if err != nil {
 			_ = u.reporter.Close()
 		}
 	}()
 
-	// 初始化 Multipart Upload
-	uploadID, initErr := u.adapter.InitMultipartUpload(ctx, key, opts)
-	if initErr != nil {
-		return fmt.Errorf("failed to init multipart upload: %w", initErr)
-	}
-
-	// 确保在出错时取消上传
-	// 使用命名返回值 err，确保任何返回路径都会触发清理
-	defer func() {
-		if err != nil {
-			_ = u.adapter.AbortMultipartUpload(ctx, key, uploadID)
+	// 获取已完成的分块
+	completedParts := make(map[int]state.CompletedPart)
+	if u.savedState != nil {
+		for _, p := range u.savedState.Completed {
+			completedParts[p.PartNumber] = p
 		}
-	}()
+		// 更新进度
+		u.reporter.Add(u.savedState.UploadedBytes)
+	}
 
 	// 创建分块通道
 	chunkChan := make(chan *chunk, u.concurrency*2)
@@ -89,7 +100,7 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 	var wg sync.WaitGroup
 	for i := 0; i < u.concurrency; i++ {
 		wg.Add(1)
-		go u.worker(ctx, &wg, key, uploadID, chunkChan, resultChan, errorChan)
+		go u.worker(ctx, &wg, key, uploadID, chunkChan, resultChan, errorChan, completedParts)
 	}
 
 	// 读取数据并发送分块
@@ -100,6 +111,14 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 
 	// 收集结果
 	var parts []storage.CompletedPart
+
+	// 添加已完成的分块
+	for _, p := range completedParts {
+		parts = append(parts, storage.CompletedPart{
+			PartNumber: p.PartNumber,
+			ETag:       p.ETag,
+		})
+	}
 
 	// 等待所有 worker 完成和结果收集
 	go func() {
@@ -130,8 +149,7 @@ func (u *Uploader) Upload(ctx context.Context, key string, r io.Reader, opts sto
 			return uploadErr
 
 		case <-readDone:
-			// 读取完成，但可能还有结果在路上
-			// 继续等待 resultChan 关闭
+			// 读取完成，继续等待 resultChan 关闭
 		}
 	}
 
@@ -151,9 +169,10 @@ complete:
 	return nil
 }
 
-// worker 处理分块上传
-func (u *Uploader) worker(ctx context.Context, wg *sync.WaitGroup, key, uploadID string,
-	chunkChan <-chan *chunk, resultChan chan<- *partResult, errorChan chan<- error) {
+// worker 处理分块上传（支持跳过已完成的分块）
+func (u *ResumableUploader) worker(ctx context.Context, wg *sync.WaitGroup, key, uploadID string,
+	chunkChan <-chan *chunk, resultChan chan<- *partResult, errorChan chan<- error,
+	completedParts map[int]state.CompletedPart) {
 
 	defer wg.Done()
 
@@ -164,6 +183,18 @@ func (u *Uploader) worker(ctx context.Context, wg *sync.WaitGroup, key, uploadID
 		default:
 		}
 
+		// 检查该分块是否已完成
+		if completed, ok := completedParts[chunk.partNumber]; ok {
+			// 跳过已完成的分块
+			resultChan <- &partResult{
+				partNumber: completed.PartNumber,
+				etag:       completed.ETag,
+			}
+			putBuffer(chunk.data)
+			continue
+		}
+
+		// 上传分块
 		etag, err := u.adapter.UploadPart(ctx, key, uploadID, chunk.partNumber, bytes.NewReader(chunk.data), chunk.size)
 		if err != nil {
 			errorChan <- fmt.Errorf("failed to upload part %d: %w", chunk.partNumber, err)
@@ -173,7 +204,12 @@ func (u *Uploader) worker(ctx context.Context, wg *sync.WaitGroup, key, uploadID
 		// 更新进度
 		u.reporter.Add(chunk.size)
 
-		// 保存状态（用于断点续传）
+		resultChan <- &partResult{
+			partNumber: chunk.partNumber,
+			etag:       etag,
+		}
+
+		// 保存状态
 		if u.stateMgr != nil {
 			u.stateMgr.AddCompletedPart(state.CompletedPart{
 				PartNumber: chunk.partNumber,
@@ -182,18 +218,13 @@ func (u *Uploader) worker(ctx context.Context, wg *sync.WaitGroup, key, uploadID
 			})
 		}
 
-		resultChan <- &partResult{
-			partNumber: chunk.partNumber,
-			etag:       etag,
-		}
-
 		// 回收缓冲区
 		putBuffer(chunk.data)
 	}
 }
 
 // readChunks 读取数据并发送分块
-func (u *Uploader) readChunks(ctx context.Context, r io.Reader, chunkChan chan<- *chunk, errorChan chan<- error) {
+func (u *ResumableUploader) readChunks(ctx context.Context, r io.Reader, chunkChan chan<- *chunk, errorChan chan<- error) {
 	defer close(chunkChan)
 
 	partNumber := 1
@@ -233,45 +264,8 @@ func (u *Uploader) readChunks(ctx context.Context, r io.Reader, chunkChan chan<-
 }
 
 // sortParts 按分块号排序
-func (u *Uploader) sortParts(parts []storage.CompletedPart) {
+func (u *ResumableUploader) sortParts(parts []storage.CompletedPart) {
 	sort.Slice(parts, func(i, j int) bool {
 		return parts[i].PartNumber < parts[j].PartNumber
 	})
-}
-
-// chunk 数据分块
-type chunk struct {
-	partNumber int
-	data       []byte
-	size       int64
-}
-
-// partResult 分块上传结果
-type partResult struct {
-	partNumber int
-	etag       string
-}
-
-// 缓冲池
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 5*1024*1024) // 5MB
-	},
-}
-
-// getBuffer 从池中获取缓冲区
-func getBuffer(size int64) []byte {
-	buf, ok := bufferPool.Get().([]byte)
-	if !ok || int64(len(buf)) < size {
-		// 如果类型断言失败或缓冲区太小，创建新的
-		return make([]byte, size)
-	}
-	return buf
-}
-
-// putBuffer 将缓冲区放回池中
-func putBuffer(buf []byte) {
-	if cap(buf) == 5*1024*1024 {
-		bufferPool.Put(buf)
-	}
 }

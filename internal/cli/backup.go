@@ -12,6 +12,7 @@ import (
 	"github.com/lukelzlz/s3backup/pkg/config"
 	"github.com/lukelzlz/s3backup/pkg/crypto"
 	"github.com/lukelzlz/s3backup/pkg/progress"
+	"github.com/lukelzlz/s3backup/pkg/state"
 	"github.com/lukelzlz/s3backup/pkg/storage"
 	"github.com/lukelzlz/s3backup/pkg/uploader"
 	"github.com/spf13/cobra"
@@ -34,6 +35,7 @@ var (
 	chunkSize    int64
 	dryRun       bool
 	noProgress   bool
+	stateDir     string
 )
 
 // backupCmd 备份命令
@@ -65,6 +67,7 @@ func init() {
 	backupCmd.Flags().Int64Var(&chunkSize, "chunk-size", 0, "分块大小（字节）")
 	backupCmd.Flags().BoolVar(&dryRun, "dry-run", false, "模拟运行，不实际上传")
 	backupCmd.Flags().BoolVar(&noProgress, "no-progress", false, "禁用进度条")
+	backupCmd.Flags().StringVar(&stateDir, "state-dir", "", "状态文件目录（用于断点续传）")
 }
 
 func runBackup(cmd *cobra.Command, args []string) error {
@@ -156,6 +159,9 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create storage adapter: %w", err)
 	}
 
+	// 创建状态管理器
+	stateMgr := state.NewStateManager(stateDir, backupName)
+
 	// 创建 io.Pipe 连接归档和上传
 	pr, pw := io.Pipe()
 
@@ -209,6 +215,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	if !dryRun {
 		// 创建上传器
 		upl := uploader.NewUploader(adapter, cfg.Backup.ChunkSize, cfg.Backup.Concurrency)
+		upl.SetStateManager(stateMgr)
 
 		// 设置进度报告器
 		var reporter progress.Reporter
@@ -230,6 +237,17 @@ func runBackup(cmd *cobra.Command, args []string) error {
 			ContentType:  contentType,
 		}
 
+		// 保存初始状态
+		initialState := &state.UploadState{
+			Key:          backupName,
+			Bucket:       cfg.Storage.Bucket,
+			Provider:     cfg.Storage.Provider,
+			StorageClass: cfg.Storage.StorageClass,
+			Encrypted:    cfg.Encryption.Enabled,
+			Completed:    []state.CompletedPart{},
+		}
+		stateMgr.Save(initialState)
+
 		// 启动上传 goroutine
 		go func() {
 			if err := upl.Upload(ctx, backupName, pr, opts); err != nil {
@@ -242,8 +260,14 @@ func runBackup(cmd *cobra.Command, args []string) error {
 
 		// 等待完成
 		if err := <-errChan; err != nil {
+			// 上传失败，状态已保存，可以使用 resume 恢复
+			fmt.Printf("\n上传失败，状态已保存。使用以下命令恢复:\n")
+			fmt.Printf("  s3backup resume %s\n", backupName)
 			return err
 		}
+
+		// 删除状态文件
+		stateMgr.Delete()
 	} else {
 		// 模拟运行：只读取数据不上传
 		go func() {
