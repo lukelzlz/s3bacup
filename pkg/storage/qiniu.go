@@ -53,13 +53,11 @@ func (q *QiniuAdapter) InitMultipartUpload(ctx context.Context, key string, opts
 		Key:    aws.String(key),
 	}
 
-	// 七牛云存储类型通过 x-qiniu-headers 设置
+	// 七牛云 S3 兼容接口通过 x-amz-storage-class header 设置存储类型
+	// 支持: STANDARD、LINE、INTELLIGENT_TIERING、GLACIER_IR、GLACIER、DEEP_ARCHIVE
 	if opts.StorageClass.IsValid() {
-		// 七牛云存储类型映射到 x-qiniu-storage-class
-		qiniuStorageClass := q.mapStorageClass(opts.StorageClass)
-		input.Metadata = map[string]string{
-			"x-qiniu-storage-class": qiniuStorageClass,
-		}
+		qiniuStorageClass := types.StorageClass(q.mapStorageClass(opts.StorageClass))
+		input.StorageClass = qiniuStorageClass
 	}
 	if opts.ContentType != "" {
 		input.ContentType = aws.String(opts.ContentType)
@@ -155,16 +153,16 @@ func (q *QiniuAdapter) SupportedStorageClasses() []StorageClass {
 }
 
 // SetStorageClass 设置存储类型
-// 七牛云通过 chtype API 修改存储类型，这里使用 CopyObject 模拟
+// 七牛 S3 兼容接口通过 CopyObject + x-amz-storage-class 修改存储类型
 func (q *QiniuAdapter) SetStorageClass(ctx context.Context, key string, class StorageClass) error {
 	copySource := fmt.Sprintf("%s/%s", q.bucket, key)
-	qiniuStorageClass := q.mapStorageClass(class)
+	qiniuStorageClass := types.StorageClass(q.mapStorageClass(class))
 
 	input := &s3.CopyObjectInput{
 		Bucket:            aws.String(q.bucket),
 		CopySource:        aws.String(copySource),
 		Key:               aws.String(key),
-		Metadata:          map[string]string{"x-qiniu-storage-class": qiniuStorageClass},
+		StorageClass:      qiniuStorageClass,
 		MetadataDirective: types.MetadataDirectiveReplace,
 	}
 
@@ -176,23 +174,24 @@ func (q *QiniuAdapter) SetStorageClass(ctx context.Context, key string, class St
 	return nil
 }
 
-// mapStorageClass 将通用存储类型映射到七牛云的存储类型值
-// 七牛云存储类型: 0=标准, 1=低频, 2=归档, 3=深度归档, 4=归档直读, 5=智能分层
+// mapStorageClass 将通用存储类型映射到七牛云 S3 兼容接口的存储类型字符串
+// 七牛 S3 兼容接口 x-amz-storage-class 取值:
+// STANDARD、LINE、INTELLIGENT_TIERING、GLACIER_IR、GLACIER、DEEP_ARCHIVE
 func (q *QiniuAdapter) mapStorageClass(sc StorageClass) string {
 	switch sc {
 	case StorageClassStandard:
-		return "0" // 标准存储
+		return "STANDARD"
 	case StorageClassInfrequent:
-		return "1" // 低频存储
+		return "LINE" // 七牛低频存储对应 LINE，不是 STANDARD_IA
 	case StorageClassArchive:
-		return "2" // 归档存储
+		return "GLACIER"
 	case StorageClassDeepArchive:
-		return "3" // 深度归档
+		return "DEEP_ARCHIVE"
 	case StorageClassGlacierIR:
-		return "4" // 归档直读
+		return "GLACIER_IR"
 	case StorageClassIntelligentTiering:
-		return "5" // 智能分层
+		return "INTELLIGENT_TIERING"
 	default:
-		return "0"
+		return "STANDARD"
 	}
 }

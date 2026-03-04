@@ -45,6 +45,10 @@ func (a *Archiver) Archive(ctx context.Context, w io.Writer) error {
 	defer tarWriter.Close()
 
 	for _, include := range a.includes {
+		// 顶层路径不存在直接报错，不要静默跳过
+		if _, err := os.Lstat(include); err != nil {
+			return fmt.Errorf("failed to archive %s: %w", include, err)
+		}
 		if err := a.archivePath(ctx, tarWriter, include, ""); err != nil {
 			return fmt.Errorf("failed to archive %s: %w", include, err)
 		}
